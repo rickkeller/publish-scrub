@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "publish-scrub"
+version = "0.1.0"
+description = "Read-only check before a public export. Does not upload or edit the tree."
+requires-python = ">=3.11"
+
+[project.scripts]
+publish-scrub = "publish_scrub.__main__:main"
+
+[tool.setuptools]
+packages = ["publish_scrub"]
