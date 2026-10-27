@@ -6,14 +6,22 @@ It looks for:
 
 | Kind | What matches |
 | --- | --- |
-| `token` | Common token prefixes: GitHub (`ghp_`, `github_pat_`), AWS access keys (`AKIA`), Slack (`xox…-`) and `sk-` keys |
+| `github-token` | `ghp_` and `github_pat_` |
+| `aws-key` | `AKIA` access key ids |
+| `slack-token` | `xox` Slack tokens |
+| `openai-key` | `sk-` keys that contain a digit. A class name is not a key |
+| `slack-webhook` | Slack incoming webhook URLs |
+| `private-key` | PEM private-key headers, including OpenSSH |
+| `db-url` | Database URLs that include a password |
 | `bot-token` | Telegram bot token shapes (`<digits>:<long id>`) |
-| `assignment` | `password`, `secret`, `api_key` or `token` assigned a quoted value of 8 or more characters |
+| `assignment` | A name containing `password`, `secret`, `api_key` or `token`, quoted or not. A prefix such as `AWS_SECRET_ACCESS_KEY` counts |
 | `chat-id` | `chat_id` or `user_id` assigned a number of 8 or more digits |
 | `host-path` | Absolute home-directory paths (the Linux and macOS home roots) |
 | `private-url` | GitHub URLs to repositories whose names end in `-private` |
 
-Values that contain a placeholder word (`example`, `changeme`, `placeholder`, `redacted`, `your_`, `todo`, `****`) are ignored.
+A placeholder is ignored only when the whole value is one (`example`, `changeme`, `placeholder`, `redacted`, `todo`, `your_…`). A real value that merely contains those letters is not ignored. `${{ secrets.… }}` is not a finding.
+
+Exit 0 means no findings. Exit 1 means findings. Exit 2 means the check could not finish, including missing git or a history scan that hit the size cap. An unread file is printed and does not by itself fail the run. `--no-history` skips git history.
 
 It does not edit files, upload anything or print a full secret. **It isn't a substitute for reading the export yourself**: a clean result can still miss a secret that doesn't match a pattern. A public export isn't done until this check exits 0.
 
@@ -44,11 +52,11 @@ echo "exit code: $?"
 Each finding prints as one line in the form `kind location:line masked-value`, for example:
 
 ```
-token config/settings.py:12 ghp_**** len=24
-private-url history:33 gith**** len=28
+github-token config/settings.py:12 ghp_**** len=24
+private-url abc1234:old/README.md:3 gith**** len=28
 ```
 
-`history` as the location means the match is in an old commit, from `git log -p --all`. Deleting the file from the tree won't remove it. You need to rewrite the history, or export a fresh tree without it.
+A history location is `commit:path:line`. Deleting the file from the tree does not remove it. Rewrite that history, or export a fresh tree without it.
 
 ### Exit codes
 
@@ -56,21 +64,21 @@ private-url history:33 gith**** len=28
 | --- | --- |
 | `0` | No findings. |
 | `1` | At least one finding. Don't publish this tree. |
-| `2` | The path isn't a directory, or the arguments are wrong. |
+| `2` | The check could not finish. Missing git, a truncated history, a bad path, or bad arguments. This is not a finding. |
 
 ## Configuration
 
-There are no options, config files or environment variables. These are fixed in the code:
+There is one option: `--no-history`. These are fixed in the code:
 
-- Skipped directories: `.git`, `.hg`, `.svn`, `node_modules`, `.venv`, `venv` and `__pycache__`.
-- Binary files and files that aren't UTF-8 are skipped.
+- Skipped directories: `.git`, `.hg`, `.svn`, `node_modules`, `.venv`, `venv` and `__pycache__`. They are listed as unread.
+- Binary files, zip files, and files that are not UTF-8 or UTF-16 are listed as unread. They do not fail the run.
 - Symlinks are not followed.
-- Files over 1 MB are reported as `unread`, and history over 20 MB is reported as `truncated`. Both count as findings.
+- Files over 1 MB are unread. History over 20 MB exits 2. Neither is a secret finding.
 
 ## Troubleshooting
 
-- **`history .:1 git history was not scanned`.** The directory isn't a git repository, or `git log` failed. The result is exit 1 on purpose, because the history wasn't checked. Run the scan on the git checkout you plan to publish.
-- **`git history scan was truncated`.** History is over 20 MB. Scan a fresh export with a short history instead.
+- **Missing git.** The message is on stderr and the exit code is 2. Run the scan on the git checkout you plan to publish, or pass `--no-history` if you mean to skip history.
+- **History over 20 MB.** Exit code 2. Scan a fresh export with a short history, or pass `--no-history`.
 - **`unread <file>:1 file exceeds the text limit`.** Check that file by hand, or leave it out of the export.
 - **False positives.** Use an obvious placeholder in examples (for example `your_token_here`), or split literal patterns in test fixtures the way `tests/test_scan.py` does.
 - **Don't paste findings into a chat or ticket.** The values are masked, but each line still points to where a secret is.
