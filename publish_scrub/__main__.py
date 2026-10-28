@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__"}
@@ -201,11 +202,39 @@ def scan(root: Path) -> list[str]:
     return found
 
 
+def self_test() -> int:
+    """Prove the installed command can scan a synthetic secret. Needs no repo files."""
+    token = "ghp_" + ("a" * 20)
+    git = shutil.which("git")
+    if git is None:
+        print("self-test failed: git is missing", file=sys.stderr)
+        return 2
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "notes.txt").write_text(token + "\n", encoding="utf-8")
+        init = subprocess.run([git, "init"], cwd=root, capture_output=True, check=False)
+        if init.returncode != 0:
+            print("self-test failed: git init", file=sys.stderr)
+            return 2
+        found, failures, _unread = collect(root, history=False)
+        joined = "\n".join(found)
+        if failures or token in joined or not any(line.startswith("github-token ") for line in found):
+            print("self-test failed", file=sys.stderr)
+            return 1
+    print("self-test passed")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only check before a public export.")
-    parser.add_argument("path", type=Path)
+    parser.add_argument("path", nargs="?", type=Path)
     parser.add_argument("--no-history", action="store_true", help="Do not scan git history")
+    parser.add_argument("--self-test", action="store_true", help="Run the installed check. Does not need the source tree.")
     args = parser.parse_args(argv)
+    if args.self_test:
+        return self_test()
+    if args.path is None:
+        parser.error("a path is required unless --self-test is set")
     root = args.path.resolve()
     if not root.is_dir():
         print("not a directory", file=sys.stderr)

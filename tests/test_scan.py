@@ -97,6 +97,13 @@ class ScanTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("unread big.lock:1", out.getvalue())
 
+    def test_self_test_does_not_need_the_source_tree(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main(["--self-test"])
+        self.assertEqual(code, 0)
+        self.assertIn("self-test passed", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

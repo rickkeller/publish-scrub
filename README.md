@@ -45,9 +45,12 @@ You can also skip installing and run `python3 -m publish_scrub` from the checkou
 ## Quickstart
 
 ```sh
+.venv/bin/publish-scrub --self-test
 .venv/bin/publish-scrub /path/to/export-tree      # or: python3 -m publish_scrub /path/to/export-tree
 echo "exit code: $?"
 ```
+
+`--self-test` is the check that works after install. It does not need `tests/`, fixtures, or `pyproject.toml`.
 
 Each finding prints as one line in the form `kind location:line masked-value`, for example:
 
@@ -87,6 +90,8 @@ There is one option: `--no-history`. These are fixed in the code:
 
 ```sh
 python3 -m unittest discover -s tests
+
+That command needs this clone. It is not part of the installed package.
 ```
 
 See [AGENTS.md](AGENTS.md).
