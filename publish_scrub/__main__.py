@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -71,7 +72,7 @@ def _skip_match(kind: str, value: str, text: str, start: int) -> bool:
     if kind == "openai-key" and not any(ch.isdigit() for ch in value):
         return True
     if kind == "host-path":
-        if start > 0 and text[start - 1] not in " \t\n\"'":
+        if start > 0 and text[start - 1] not in " \t\n\"'=":
             return True
         segment = value.split("/", 3)[2] if value.count("/") >= 2 else ""
         if segment.isdigit():
@@ -101,40 +102,92 @@ def _read_text(data: bytes) -> str | None:
     return data.decode("utf-8")
 
 
-def scan_tree(root: Path) -> tuple[list[str], list[str]]:
+def scan_tree(root: Path) -> tuple[list[str], list[str], list[str]]:
     found: list[str] = []
     unread: list[str] = []
+    failures: list[str] = []
     skipped: set[str] = set()
-    for path in sorted(root.rglob("*")):
-        rel = path.relative_to(root)
-        if any(part in SKIP_DIRS for part in rel.parts):
-            skipped.update(part for part in rel.parts if part in SKIP_DIRS)
+    walk_error = False
+
+    def onerror(_err: OSError) -> None:
+        nonlocal walk_error
+        walk_error = True
+
+    for current, dirnames, filenames in os.walk(root, onerror=onerror):
+        if walk_error:
+            failures.append("working tree was not fully scanned")
+            return found, unread, failures
+        rel_dir = Path(current).relative_to(root)
+        if any(part in SKIP_DIRS for part in rel_dir.parts):
+            skipped.update(part for part in rel_dir.parts if part in SKIP_DIRS)
+            dirnames[:] = []
             continue
-        if path.is_symlink() or not path.is_file():
-            continue
-        if path.stat().st_size > TEXT_LIMIT:
-            unread.append(f"unread {rel}:1 file exceeds the text limit")
-            continue
-        if path.suffix.lower() == ".zip":
-            unread.append(f"unread {rel}:1 zip was not opened")
-            continue
-        data = path.read_bytes()
-        try:
-            text = _read_text(data)
-        except UnicodeDecodeError:
-            text = None
-        if text is None:
-            unread.append(f"unread {rel}:1 file was not decoded")
-            continue
-        found.extend(findings_in_text(text, str(rel)))
+        kept: list[str] = []
+        for name in dirnames:
+            if name in SKIP_DIRS:
+                skipped.add(name)
+            else:
+                kept.append(name)
+        dirnames[:] = kept
+        for name in filenames:
+            path = Path(current) / name
+            rel = path.relative_to(root)
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if path.stat().st_size > TEXT_LIMIT:
+                    unread.append(f"unread {rel}:1 file exceeds the text limit")
+                    continue
+                if path.suffix.lower() == ".zip":
+                    unread.append(f"unread {rel}:1 zip was not opened")
+                    continue
+                data = path.read_bytes()
+            except OSError:
+                failures.append("working tree was not fully scanned")
+                return found, unread, failures
+            try:
+                text = _read_text(data)
+            except UnicodeDecodeError:
+                text = None
+            if text is None:
+                unread.append(f"unread {rel}:1 file was not decoded")
+                continue
+            found.extend(findings_in_text(text, str(rel)))
+    if walk_error:
+        failures.append("working tree was not fully scanned")
+        return found, unread, failures
     unread.extend(f"unread {name}:1 skipped directory" for name in sorted(skipped))
-    return found, unread
+    return found, unread, failures
+
+
+def _diff_path(raw: str) -> str:
+    rest = raw[len("diff --git "):].strip()
+
+    def take(text: str) -> tuple[str, str]:
+        text = text.lstrip()
+        if not text:
+            return "", ""
+        if text.startswith('"'):
+            end = text.find('"', 1)
+            if end == -1:
+                return text[1:], ""
+            return text[1:end], text[end + 1:]
+        token, _, leftover = text.partition(" ")
+        return token, leftover
+
+    first, rest = take(rest)
+    second, _rest = take(rest)
+    path = second or first
+    if path.startswith("b/") or path.startswith("a/"):
+        path = path[2:]
+    return path
 
 
 def _history_findings(text: str) -> list[str]:
     sha = ""
     path = ""
     new_line = 1
+    old_line = 1
     found: list[str] = []
     for raw in text.splitlines():
         if raw.startswith("commit ") and len(raw.split()) >= 2:
@@ -142,19 +195,22 @@ def _history_findings(text: str) -> list[str]:
             path = ""
             continue
         if raw.startswith("diff --git "):
-            parts = raw.split(" b/", 1)
-            path = parts[1] if len(parts) == 2 else ""
+            path = _diff_path(raw)
             continue
         if raw.startswith("@@"):
+            minus = raw.split("-", 1)
             plus = raw.split("+", 1)
-            num = plus[1].split(",")[0].split()[0] if len(plus) == 2 else "1"
-            new_line = int(num) if num.lstrip("-").isdigit() else 1
+            old_num = minus[1].split(",")[0].split()[0] if len(minus) == 2 else "1"
+            new_num = plus[1].split(",")[0].split()[0] if len(plus) == 2 else "1"
+            old_line = int(old_num) if old_num.lstrip("-").isdigit() else 1
+            new_line = int(new_num) if new_num.lstrip("-").isdigit() else 1
             continue
         if raw.startswith("+") and not raw.startswith("+++"):
             found.extend(findings_in_text(raw[1:], f"{sha}:{path}", new_line))
             new_line += 1
         elif raw.startswith("-") and not raw.startswith("---"):
-            found.extend(findings_in_text(raw[1:], f"{sha}:{path}", new_line))
+            found.extend(findings_in_text(raw[1:], f"{sha}:{path}", old_line))
+            old_line += 1
     return found
 
 
@@ -167,32 +223,45 @@ def scan_history(root: Path) -> tuple[list[str], list[str], list[str]]:
         failures.append("git history was not scanned")
         return found, failures, unread
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [git, "-C", str(root), "log", "-p", "--all", "-U0", "--no-color", "--pretty=format:commit %H"],
-            capture_output=True,
-            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
     except OSError:
         failures.append("git history was not scanned")
         return found, failures, unread
-    if result.returncode != 0:
+    chunks: list[bytes] = []
+    total = 0
+    assert proc.stdout is not None
+    while True:
+        block = proc.stdout.read(65536)
+        if not block:
+            break
+        total += len(block)
+        if total > HISTORY_LIMIT:
+            proc.kill()
+            proc.stdout.close()
+            proc.wait()
+            failures.append("git history scan was truncated")
+            return found, failures, unread
+        chunks.append(block)
+    proc.stdout.close()
+    if proc.wait() != 0:
         failures.append("git history was not scanned")
         return found, failures, unread
-    data = result.stdout
-    if len(data) > HISTORY_LIMIT:
-        failures.append("git history scan was truncated")
-        return found, failures, unread
+    data = b"".join(chunks)
     text = data.decode("utf-8", errors="replace")
     found.extend(_history_findings(text))
     return found, failures, unread
 
 
 def collect(root: Path, *, history: bool = True) -> tuple[list[str], list[str], list[str]]:
-    found, unread = scan_tree(root)
-    failures: list[str] = []
+    found, unread, failures = scan_tree(root)
     if history:
-        hist, failures, hist_unread = scan_history(root)
+        hist, hist_failures, hist_unread = scan_history(root)
         found.extend(hist)
+        failures.extend(hist_failures)
         unread.extend(hist_unread)
     return found, failures, unread
 

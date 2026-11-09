@@ -104,6 +104,82 @@ class ScanTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("self-test passed", out.getvalue())
 
+    def test_home_path_after_equals_is_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            line = "HOME=" + "/" + "home" + "/app/demo"
+            (root / "env.txt").write_text(line + "\n", encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "add", "env.txt"], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-m", "add"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            found = scan(root)
+            self.assertTrue(any(line.startswith("host-path ") and "env.txt" in line for line in found))
+            self.assertNotIn("/" + "home" + "/app/demo", "\n".join(found))
+
+    def test_unreadable_directory_is_exit_2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hidden = root / "hidden"
+            hidden.mkdir()
+            (hidden / "note.txt").write_text("clean\n", encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+            hidden.chmod(0)
+            try:
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    code = main([tmp])
+                self.assertEqual(code, 2)
+                self.assertIn("working tree was not fully scanned", err.getvalue())
+            finally:
+                hidden.chmod(0o700)
+
+    def test_quoted_history_path_keeps_the_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            name = "my notes.txt"
+            token = "ghp_" + ("b" * 20)
+            (root / name).write_text(token + "\n", encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "add", name], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-m", "add"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            found = scan(root)
+            hits = [line for line in found if line.startswith("github-token ") and "my notes.txt" in line]
+            self.assertTrue(hits)
+            self.assertNotIn('"', hits[0])
+            self.assertNotIn(token, "\n".join(found))
+
+    def test_history_over_the_cap_exits_before_returning_findings(self):
+        from publish_scrub import __main__ as scrub
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "notes.txt").write_text("A clean note.\n", encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "add", "notes.txt"], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-m", "add"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            old = scrub.HISTORY_LIMIT
+            scrub.HISTORY_LIMIT = 20
+            try:
+                _found, failures, _unread = scrub.scan_history(root)
+            finally:
+                scrub.HISTORY_LIMIT = old
+            self.assertIn("git history scan was truncated", failures)
+
 
 if __name__ == "__main__":
     unittest.main()

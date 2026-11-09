@@ -1,27 +1,29 @@
 # Publish Scrub
 
-A local, read-only check to run **before you copy a private tree into a public repository**. It scans the working tree and the full git history for likely secrets and private details, then prints each finding with its value masked.
+A local, read-only check to run **before you copy a private tree into a public repository**. It scans the working tree and git history, then prints each finding with its value masked.
 
 It looks for:
 
 | Kind | What matches |
 | --- | --- |
-| `github-token` | `ghp_` and `github_pat_` |
-| `aws-key` | `AKIA` access key ids |
-| `slack-token` | `xox` Slack tokens |
-| `openai-key` | `sk-` keys that contain a digit. A class name is not a key |
-| `slack-webhook` | Slack incoming webhook URLs |
-| `private-key` | PEM private-key headers, including OpenSSH |
-| `db-url` | Database URLs that include a password |
-| `bot-token` | Telegram bot token shapes (`<digits>:<long id>`) |
-| `assignment` | A name containing `password`, `secret`, `api_key` or `token`, quoted or not. A prefix such as `AWS_SECRET_ACCESS_KEY` counts |
-| `chat-id` | `chat_id` or `user_id` assigned a number of 8 or more digits |
-| `host-path` | Absolute home-directory paths (the Linux and macOS home roots) |
-| `private-url` | GitHub URLs to repositories whose names end in `-private` |
+| `github-token` | `ghp_` and `github_pat_` followed by 8 or more letters, digits, or underscores |
+| `aws-key` | `AKIA` followed by 8 or more uppercase letters or digits |
+| `slack-token` | `xoxb-`, `xoxa-`, `xoxp-`, `xoxr-`, or `xoxs-` plus 8 or more token characters |
+| `openai-key` | `sk-` followed by 8 or more token characters, and only when that value contains a digit |
+| `slack-webhook` | `https://hooks.slack.com/services/` plus 8 or more path characters |
+| `private-key` | A PEM private-key header, including RSA, OpenSSH, EC, and DSA |
+| `db-url` | `postgres`, `postgresql`, `mysql`, `mongodb`, or `redis`, then `://`, then characters other than `:`, `*`, `@`, or whitespace, then `@` |
+| `bot-token` | 8 to 10 digits, a colon, then 30 or more token characters |
+| `assignment` | A name containing `password`, `secret`, `api_key`, `api-key`, `apikey`, or `token`, then `:` or `=`, then a value of 8 or more characters |
+| `chat-id` | `chat_id`, `chat-id`, `chatid`, `user_id`, `user-id`, or `userid`, assigned a number of 8 or more digits |
+| `host-path` | An absolute `/home/` or `/Users/` path. A digit-only name in the third slash field is skipped |
+| `private-url` | A `github.com/` URL whose path contains `-private` |
 
-A placeholder is ignored only when the whole value is one (`example`, `changeme`, `placeholder`, `redacted`, `todo`, `your_…`). A real value that merely contains those letters is not ignored. `${{ secrets.… }}` is not a finding.
+A placeholder is ignored only when the whole assigned value is one of `example`, `changeme`, `placeholder`, `redacted`, `todo`, `****`, `your_password`, `your_token`, or starts with `your_`. A real value that merely contains those letters is not ignored. A `${{` near the match is ignored. An assignment whose value contains `(` is ignored.
 
-Exit 0 means no findings. Exit 1 means findings. Exit 2 means the check could not finish, including missing git or a history scan that hit the size cap. An unread file is printed and does not by itself fail the run. `--no-history` skips git history.
+Exit 0 means no findings. Exit 1 means at least one finding. Exit 2 means the check could not finish. That includes a path that is not a directory, a file or directory that cannot be read, missing git, a history scan that failed, and a history scan over 20 MB. Exit 2 is not a finding. If the history scan cannot finish, its findings are not returned, and the run exits 2 even when the working tree had findings.
+
+An unread file is printed and does not by itself fail the run. A file or directory that cannot be read is an unfinished scan, exit 2, not an unread line. `--no-history` skips git history.
 
 It does not edit files, upload anything or print a full secret. **It isn't a substitute for reading the export yourself**: a clean result can still miss a secret that doesn't match a pattern. A public export isn't done until this check exits 0.
 
@@ -67,7 +69,7 @@ A history location is `commit:path:line`. Deleting the file from the tree does n
 | --- | --- |
 | `0` | No findings. |
 | `1` | At least one finding. Don't publish this tree. |
-| `2` | The check could not finish. Missing git, a truncated history, a bad path, or bad arguments. This is not a finding. |
+| `2` | The check could not finish. A bad path, an unreadable file or directory, missing git, a history scan that failed, or a history scan over 20 MB. History findings are not returned. This is not a finding. |
 
 ## Configuration
 
@@ -76,12 +78,12 @@ There is one option: `--no-history`. These are fixed in the code:
 - Skipped directories: `.git`, `.hg`, `.svn`, `node_modules`, `.venv`, `venv` and `__pycache__`. They are listed as unread.
 - Binary files, zip files, and files that are not UTF-8 or UTF-16 are listed as unread. They do not fail the run.
 - Symlinks are not followed.
-- Files over 1 MB are unread. History over 20 MB exits 2. Neither is a secret finding.
+- Files over 1 MB are unread. History is read until 20 MB and then the scan stops. A larger history exits 2 and does not return history findings. Neither is a secret finding.
 
 ## Troubleshooting
 
 - **Missing git.** The message is on stderr and the exit code is 2. Run the scan on the git checkout you plan to publish, or pass `--no-history` if you mean to skip history.
-- **History over 20 MB.** Exit code 2. Scan a fresh export with a short history, or pass `--no-history`.
+- **History over 20 MB.** Exit code 2. History findings are not returned. Scan a fresh export with a short history, or pass `--no-history` if you mean to skip history.
 - **`unread <file>:1 file exceeds the text limit`.** Check that file by hand, or leave it out of the export.
 - **False positives.** Use an obvious placeholder in examples (for example `your_token_here`), or split literal patterns in test fixtures the way `tests/test_scan.py` does.
 - **Don't paste findings into a chat or ticket.** The values are masked, but each line still points to where a secret is.
