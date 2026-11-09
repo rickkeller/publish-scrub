@@ -37,7 +37,7 @@ def _patterns() -> list[tuple[str, re.Pattern[str]]]:
         ("openai-key", re.compile(r"(?<![\w.])sk-[A-Za-z0-9_-]{8,}")),
         ("slack-webhook", re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/_-]{8,}")),
         ("private-key", re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----")),
-        ("db-url", re.compile(r"(?i)\b(?:postgres|postgresql|mysql|mongodb|redis)://[^:\s]+:[^@\s]+@")),
+        ("db-url", re.compile(r"(?i)\b(?:postgres|postgresql|mysql|mongodb|redis)://[^:*@\s]+@")),
         ("bot-token", re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{30,}\b")),
         ("assignment", re.compile(rf"(?i)(?:^|[^\w])({key_name})\s*[:=]\s*({quoted}|{bare})")),
         ("chat-id", re.compile(r"(?i)\b(?:chat[_-]?id|user[_-]?id)\b\s*[:=]\s*['\"]?\d{8,}")),
